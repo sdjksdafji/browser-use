@@ -478,7 +478,14 @@ class BrowserUseServer:
 		profile = BrowserProfile(**profile_data)
 
 		# Create browser session
-		self.browser_session = BrowserSession(browser_profile=profile)
+		# Create browser session
+		if os.getenv('USE_CDP', 'false').lower() == 'true':
+			cdp_domain = os.getenv('CDP_DOMAIN', 'localhost')
+			cdp_port = int(os.getenv('CDP_PORT', '9222'))
+			self.browser_session = BrowserSession(
+				cdp_url="http://{domain}:{port}".format(domain=cdp_domain, port=cdp_port))
+		else:
+			self.browser_session = BrowserSession(browser_profile=profile)
 		await self.browser_session.start()
 
 		# Create controller for direct actions
