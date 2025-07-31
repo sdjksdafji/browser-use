@@ -47,32 +47,40 @@ from browser_use.logging_config import setup_logging
 
 
 def _configure_mcp_server_logging():
-	"""Configure logging for MCP server mode - redirect all logs to stderr to prevent JSON RPC interference."""
-	# Set environment to suppress browser-use logging during server mode
-	os.environ['BROWSER_USE_LOGGING_LEVEL'] = 'error'
+	"""Configure logging for MCP server mode - redirect all logs to a file to prevent JSON RPC interference."""
+	# Set environment to enable more detailed logging for file output
+	os.environ['BROWSER_USE_LOGGING_LEVEL'] = 'debug'  # Changed from 'error' to 'debug'
 	os.environ['BROWSER_USE_SETUP_LOGGING'] = 'false'  # Prevent automatic logging setup
 
-	# Configure logging to stderr for MCP mode
-	setup_logging(stream=sys.stderr, log_level='error', force_setup=True)
+	# Define log file path - can be customized via environment variable
+	log_file_path = 'C:/Users/shuyi/repo/rental-agent/MCP.log'
+	
+	# Ensure log directory exists
+	os.makedirs(os.path.dirname(os.path.abspath(log_file_path)), exist_ok=True)
 
-	# Also configure the root logger and all existing loggers to use stderr
+	# Configure logging to file for MCP mode
+	setup_logging(stream=sys.stderr, log_level='debug', force_setup=True)
+
+	# Configure the root logger and all existing loggers to use file handler
 	logging.root.handlers = []
-	stderr_handler = logging.StreamHandler(sys.stderr)
-	stderr_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
-	logging.root.addHandler(stderr_handler)
-	logging.root.setLevel(logging.ERROR)
+	
+	# Create file handler with detailed formatting
+	file_handler = logging.FileHandler(log_file_path, mode='a', encoding='utf-8')
+	file_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+	logging.root.addHandler(file_handler)
+	logging.root.setLevel(logging.DEBUG)  # Changed from ERROR to DEBUG
 
-	# Configure all existing loggers to use stderr
+	# Configure all existing loggers to use file handler
 	for name in list(logging.root.manager.loggerDict.keys()):
 		logger_obj = logging.getLogger(name)
 		logger_obj.handlers = []
-		logger_obj.addHandler(stderr_handler)
-		logger_obj.setLevel(logging.ERROR)
+		logger_obj.addHandler(file_handler)
+		logger_obj.setLevel(logging.DEBUG)  # Changed from ERROR to DEBUG
 		logger_obj.propagate = False
+	
+	# Log the configuration
+	logging.info(f"MCP Server logging configured to write to: {log_file_path}")
 
-
-# Configure MCP server logging before any browser_use imports to capture early log lines
-_configure_mcp_server_logging()
 
 # Import browser_use modules
 from browser_use import ActionModel, Agent
@@ -112,6 +120,7 @@ def _ensure_all_loggers_use_stderr():
 
 # Ensure stderr logging after all imports
 _ensure_all_loggers_use_stderr()
+_configure_mcp_server_logging()
 
 
 # Try to import MCP SDK
@@ -290,6 +299,31 @@ class BrowserUseServer:
 					},
 				),
 				types.Tool(
+					name='browser_scroll_by_mouse',
+					description='Scroll the page at the specific position, like a mouse scroll',
+					inputSchema={
+						'type': 'object',
+						'properties': {
+							'x': {
+								'type': 'integer',
+								'description': 'x position of the mouse',
+								'default': 0,
+							},
+							'y': {
+								'type': 'integer',
+								'description': 'y position of the mouse',
+								'default': 0,
+							},
+							'direction': {
+								'type': 'string',
+								'enum': ['up', 'down'],
+								'description': 'Direction to scroll',
+								'default': 'down',
+							}
+						},
+					},
+				),
+				types.Tool(
 					name='browser_go_back',
 					description='Go back to the previous page',
 					inputSchema={'type': 'object', 'properties': {}},
@@ -391,6 +425,8 @@ class BrowserUseServer:
 
 		# Agent-based tools
 		if tool_name == 'retry_with_browser_use_agent':
+			if not self.browser_session:
+				await self._init_browser_session()
 			return await self._retry_with_browser_use_agent(
 				task=arguments['task'],
 				max_steps=arguments.get('max_steps', 100),
@@ -422,6 +458,10 @@ class BrowserUseServer:
 
 			elif tool_name == 'browser_scroll':
 				return await self._scroll(arguments.get('direction', 'down'))
+
+			elif tool_name == 'browser_scroll_by_mouse':
+				return await self._scroll_at_x_y(arguments.get('x', 0), arguments.get('y', 0),
+												 arguments.get('direction', 'down'))
 
 			elif tool_name == 'browser_go_back':
 				return await self._go_back()
@@ -536,21 +576,25 @@ class BrowserUseServer:
 			temperature=llm_config.get('temperature', 0.7),
 		)
 
-		# Get profile config and merge with tool parameters
-		profile_config = get_default_profile(self.config)
+		if not self.browser_session:
+			return 'Error: No browser session active'
 
-		# Override allowed_domains if provided in tool call
-		if allowed_domains is not None:
-			profile_config['allowed_domains'] = allowed_domains
-
-		# Create browser profile using config
-		profile = BrowserProfile(**profile_config)
+		# # Get profile config and merge with tool parameters
+		# profile_config = get_default_profile(self.config)
+		#
+		# # Override allowed_domains if provided in tool call
+		# if allowed_domains is not None:
+		# 	profile_config['allowed_domains'] = allowed_domains
+		#
+		# # Create browser profile using config
+		# profile = BrowserProfile(**profile_config)
 
 		# Create and run agent
 		agent = Agent(
 			task=task,
 			llm=llm,
-			browser_profile=profile,
+			# browser_profile=profile,
+			browser_session=self.browser_session,
 			use_vision=use_vision,
 		)
 
@@ -744,6 +788,62 @@ class BrowserUseServer:
 		await page.evaluate('(y) => window.scrollBy(0, y)', dy)
 		return f'Scrolled {direction}'
 
+	async def _scroll_at_x_y(self, x: int, y: int, direction: str = 'down', scroll_amount: int = 100) -> str:
+		"""Scroll at a specific position (x, y) on the page."""
+		if not self.browser_session:
+			return 'Error: No browser session active'
+
+		page = await self.browser_session.get_current_page()
+
+		# Calculate scroll delta
+		if direction == 'down':
+			delta_x, delta_y = 0, scroll_amount
+		elif direction == 'up':
+			delta_x, delta_y = 0, -scroll_amount
+		elif direction == 'right':
+			delta_x, delta_y = scroll_amount, 0
+		elif direction == 'left':
+			delta_x, delta_y = -scroll_amount, 0
+		else:
+			return f'Error: Invalid direction "{direction}"'
+
+		# Find and scroll element at coordinates
+		scroll_result = await page.evaluate('''
+			(args) => {
+				const { x, y, deltaX, deltaY } = args;
+				const element = document.elementFromPoint(x, y);
+				if (!element) return { success: false, error: 'No element found' };
+
+				let scrollable = element;
+				while (scrollable && scrollable !== document.body) {
+					const style = window.getComputedStyle(scrollable);
+					const overflowY = style.overflowY;
+					const overflowX = style.overflowX;
+
+					if ((overflowY === 'scroll' || overflowY === 'auto') && 
+						scrollable.scrollHeight > scrollable.clientHeight) break;
+					if ((overflowX === 'scroll' || overflowX === 'auto') && 
+						scrollable.scrollWidth > scrollable.clientWidth) break;
+
+					scrollable = scrollable.parentElement;
+				}
+
+				if (!scrollable || scrollable === document.body) {
+					window.scrollBy(deltaX, deltaY);
+					return { success: true, target: 'window' };
+				} else {
+					scrollable.scrollBy(deltaX, deltaY);
+					return { success: true, target: 'element' };
+				}
+			}
+		''', {'x': x, 'y': y, 'deltaX': delta_x, 'deltaY': delta_y})
+
+		if scroll_result['success']:
+			return f'Scrolled {direction} at ({x}, {y}) - target: {scroll_result["target"]}'
+		else:
+			return f'Error: {scroll_result["error"]}'
+
+
 	async def _go_back(self) -> str:
 		"""Go back in browser history."""
 		if not self.browser_session:
@@ -815,6 +915,8 @@ async def main():
 		print('MCP SDK is required. Install with: pip install mcp', file=sys.stderr)
 		sys.exit(1)
 
+	logger.info("Starting MCP server...")
+
 	server = BrowserUseServer()
 	# Capture telemetry for server start
 	server._telemetry.capture(
@@ -838,6 +940,8 @@ async def main():
 			)
 		)
 		server._telemetry.flush()
+
+	logger.info("Stopped MCP server...")
 
 
 if __name__ == '__main__':
