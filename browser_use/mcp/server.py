@@ -788,12 +788,19 @@ class BrowserUseServer:
 		await page.evaluate('(y) => window.scrollBy(0, y)', dy)
 		return f'Scrolled {direction}'
 
-	async def _scroll_at_x_y(self, x: int, y: int, direction: str = 'down', scroll_amount: int = 100) -> str:
+	async def _scroll_at_x_y(self, x: int, y: int, direction: str = 'down') -> str:
 		"""Scroll at a specific position (x, y) on the page."""
 		if not self.browser_session:
 			return 'Error: No browser session active'
 
 		page = await self.browser_session.get_current_page()
+
+		if direction in ['down', 'up']:
+			viewport_height = await page.evaluate('() => window.innerHeight')
+			scroll_amount = viewport_height
+		else:
+			viewport_width = await page.evaluate('() => window.innerWidth')
+			scroll_amount = viewport_width
 
 		# Calculate scroll delta
 		if direction == 'down':
