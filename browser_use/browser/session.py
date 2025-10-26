@@ -21,6 +21,8 @@ from typing_extensions import deprecated
 from browser_use.config import CONFIG
 from browser_use.observability import observe_debug
 from browser_use.utils import _log_pretty_path, _log_pretty_url
+from .shuyi_helper import get_realistic_click, get_realistic_js_click, get_realistic_coordinate_click, \
+	get_screen_position
 
 from .utils import normalize_url
 
@@ -2185,10 +2187,26 @@ class BrowserSession(BaseModel):
 					await self._check_and_handle_navigation(page)
 
 			try:
-				return await perform_click(lambda: element_handle and element_handle.click(timeout=1_500))
+				self.logger.warning(f'⚠️ element_node.page_coordinates: {element_node.page_coordinates or "None"}')
+				self.logger.warning(
+					f'⚠️ element_node.viewport_coordinates: {element_node.viewport_coordinates or "None"}')
+				self.logger.warning(f'⚠️ element_node.viewport_info: {element_node.viewport_info or "None"}')
+
+				x, y = await get_screen_position(element_handle)
+
+				# return await perform_click(lambda: element_handle and element_handle.click(timeout=1_500))
+				if x is not None and y is not None:
+					res = await perform_click(get_realistic_coordinate_click(x, y, page))
+					self.logger.warning(f'⚠️ get_realistic_coordinate_click(x, y, page) finished!')
+				else:
+					res = await perform_click(lambda: element_handle and element_handle.click(timeout=1_500))
+					self.logger.warning(f'⚠️ original element_handle.click(timeout=1_500) finished!')
+				return res
 			except URLNotAllowedError as e:
 				raise e
 			except Exception as e:
+				self.logger.warning(f'⚠️ ex 0')
+				self.logger.exception(f'⚠️ Exception in realistic click: {type(e).__name__}: {e}')
 				# Check if it's a context error and provide more info
 				if 'Cannot find context with specified id' in str(e) or 'Protocol error' in str(e):
 					self.logger.warning(f'⚠️ Element context lost, attempting to re-locate element: {type(e).__name__}')
@@ -2204,6 +2222,7 @@ class BrowserSession(BaseModel):
 						return await perform_click(lambda: page.evaluate('(el) => el.click()', element_handle))
 				else:
 					# Original fallback for other errors
+					self.logger.warning(f'⚠️ ex 2')
 					try:
 						return await perform_click(lambda: page.evaluate('(el) => el.click()', element_handle))
 					except URLNotAllowedError as e:
