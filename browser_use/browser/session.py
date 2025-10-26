@@ -13,6 +13,8 @@ from cdp_use.cdp.fetch import AuthRequiredEvent, RequestPausedEvent
 from cdp_use.cdp.network import Cookie
 from cdp_use.cdp.target import AttachedToTargetEvent, SessionID, TargetID
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
+from .shuyi_helper import get_realistic_click, get_realistic_js_click, get_realistic_coordinate_click, \
+	get_screen_position
 from uuid_extensions import uuid7str
 
 from browser_use.browser.cloud import CloudBrowserAuthError, CloudBrowserError, get_cloud_browser_cdp_url
