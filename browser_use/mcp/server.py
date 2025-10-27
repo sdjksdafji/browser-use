@@ -115,11 +115,16 @@ def _configure_mcp_server_logging():
 		logger_obj.propagate = False
 
 
-# # Configure MCP server logging before any browser_use imports to capture early log lines
-# _configure_mcp_server_logging()
+log_file_path = os.getenv('MCP_SERVER_LOG_FILE_PATH', 'C:/Users/shuyi/repo/rental-agent/MCP_new_9.0.1_default')
+if log_file_path:
+	# override the original behavior
+	_configure_mcp_server_logging_for_debugging(log_file_path)
+else:
+	# Configure MCP server logging before any browser_use imports to capture early log lines
+	_configure_mcp_server_logging()
 
-# Additional suppression - disable all logging completely for MCP mode
-logging.disable(logging.CRITICAL)
+	# Additional suppression - disable all logging completely for MCP mode
+	logging.disable(logging.CRITICAL)
 
 # Import browser_use modules
 from browser_use import ActionModel, Agent
@@ -134,10 +139,7 @@ logger = logging.getLogger(__name__)
 
 def _ensure_all_loggers_use_stderr():
 	"""Ensure ALL loggers only output to stderr, not stdout."""
-	log_file_path = os.getenv('MCP_SERVER_LOG_FILE_PATH', '')
 	if log_file_path:
-		# override the original behavior
-		_configure_mcp_server_logging_for_debugging(log_file_path)
 		return
 
 	# Get the stderr handler
@@ -627,6 +629,7 @@ class BrowserUseServer:
 			cdp_profile_data = {"window_size": {"width": 1440, "height": 1080}}
 			self.browser_session = BrowserSession(
 				cdp_url="http://{domain}:{port}".format(domain=cdp_domain, port=cdp_port),
+				is_local=True,
 				browser_profile=BrowserProfile(**cdp_profile_data))
 		else:
 			self.browser_session = BrowserSession(browser_profile=profile)
@@ -883,13 +886,13 @@ class BrowserUseServer:
 			return 'Error: No browser session active'
 
 		state = await self.browser_session.get_browser_state_summary()
-
+		clickable_elements_str = state.dom_state.llm_representation()
 		result = {
 			'url': state.url,
 			'title': state.title,
 			'tabs': [{'url': tab.url, 'title': tab.title} for tab in state.tabs],
 			'interactive_elements': [],
-			'clickable_elements_in_string': state.element_tree.clickable_elements_to_string(),
+			'clickable_elements_in_string': clickable_elements_str,
 		}
 
 		# Add interactive elements with their indices
