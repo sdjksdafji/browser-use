@@ -115,7 +115,7 @@ def _configure_mcp_server_logging():
 		logger_obj.propagate = False
 
 
-log_file_path = os.getenv('MCP_SERVER_LOG_FILE_PATH', 'C:/Users/shuyi/repo/rental-agent/MCP_new_9.0.1_default')
+log_file_path = os.getenv('MCP_SERVER_LOG_FILE_PATH', '')
 if log_file_path:
 	# override the original behavior
 	_configure_mcp_server_logging_for_debugging(log_file_path)
