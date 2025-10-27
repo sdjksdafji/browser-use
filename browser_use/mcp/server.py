@@ -58,6 +58,39 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from browser_use.logging_config import setup_logging
 
 
+def _configure_mcp_server_logging_for_debugging(log_file_path):
+	"""Configure logging for MCP server mode - redirect all logs to a file to prevent JSON RPC interference."""
+	# Set environment to enable more detailed logging for file output
+	os.environ['BROWSER_USE_LOGGING_LEVEL'] = 'debug'  # Changed from 'error' to 'debug'
+	os.environ['BROWSER_USE_SETUP_LOGGING'] = 'false'  # Prevent automatic logging setup
+
+	# Ensure log directory exists
+	os.makedirs(os.path.dirname(os.path.abspath(log_file_path)), exist_ok=True)
+
+	# Configure logging to file for MCP mode
+	setup_logging(stream=sys.stderr, log_level='debug', force_setup=True)
+
+	# Configure the root logger and all existing loggers to use file handler
+	logging.root.handlers = []
+
+	# Create file handler with detailed formatting
+	file_handler = logging.FileHandler(log_file_path, mode='a', encoding='utf-8')
+	file_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+	logging.root.addHandler(file_handler)
+	logging.root.setLevel(logging.INFO)  # Changed from ERROR to INFO
+
+	# Configure all existing loggers to use file handler
+	for name in list(logging.root.manager.loggerDict.keys()):
+		logger_obj = logging.getLogger(name)
+		logger_obj.handlers = []
+		logger_obj.addHandler(file_handler)
+		logger_obj.setLevel(logging.INFO)  # Changed from ERROR to INFO
+		logger_obj.propagate = False
+
+	# Log the configuration
+	logging.info(f"MCP Server logging configured to write to: {log_file_path}")
+
+
 def _configure_mcp_server_logging():
 	"""Configure logging for MCP server mode - redirect all logs to stderr to prevent JSON RPC interference."""
 	# Set environment to suppress browser-use logging during server mode
@@ -67,7 +100,6 @@ def _configure_mcp_server_logging():
 	# Configure logging to stderr for MCP mode - preserve warnings and above for troubleshooting
 	setup_logging(stream=sys.stderr, log_level='warning', force_setup=True)
 
-	# Also configure the root logger and all existing loggers to use stderr
 	logging.root.handlers = []
 	stderr_handler = logging.StreamHandler(sys.stderr)
 	stderr_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
@@ -83,11 +115,16 @@ def _configure_mcp_server_logging():
 		logger_obj.propagate = False
 
 
-# Configure MCP server logging before any browser_use imports to capture early log lines
-_configure_mcp_server_logging()
+log_file_path = os.getenv('MCP_SERVER_LOG_FILE_PATH', '')
+if log_file_path:
+	# override the original behavior
+	_configure_mcp_server_logging_for_debugging(log_file_path)
+else:
+	# Configure MCP server logging before any browser_use imports to capture early log lines
+	_configure_mcp_server_logging()
 
-# Additional suppression - disable all logging completely for MCP mode
-logging.disable(logging.CRITICAL)
+	# Additional suppression - disable all logging completely for MCP mode
+	logging.disable(logging.CRITICAL)
 
 # Import browser_use modules
 from browser_use import ActionModel, Agent
@@ -102,6 +139,9 @@ logger = logging.getLogger(__name__)
 
 def _ensure_all_loggers_use_stderr():
 	"""Ensure ALL loggers only output to stderr, not stdout."""
+	if log_file_path:
+		return
+
 	# Get the stderr handler
 	stderr_handler = None
 	for handler in logging.root.handlers:
@@ -309,6 +349,38 @@ class BrowserUseServer:
 						},
 					},
 				),
+				# Added by Shuyi: START
+				types.Tool(
+					name='browser_scroll_by_mouse',
+					description='Scroll the page at the specific position, like a mouse scroll',
+					inputSchema={
+						'type': 'object',
+						'properties': {
+							'x': {
+								'type': 'integer',
+								'description': 'x position of the mouse',
+								'default': 0,
+							},
+							'y': {
+								'type': 'integer',
+								'description': 'y position of the mouse',
+								'default': 0,
+							},
+							'direction': {
+								'type': 'string',
+								'enum': ['up', 'down'],
+								'description': 'Direction to scroll',
+								'default': 'down',
+							}
+						},
+					},
+				),
+				types.Tool(
+					name='browser_refresh',
+					description='Refresh the current page',
+					inputSchema={'type': 'object', 'properties': {}},
+				),
+				# Added by Shuyi: END
 				types.Tool(
 					name='browser_go_back',
 					description='Go back to the previous page',
@@ -446,6 +518,8 @@ class BrowserUseServer:
 
 		# Agent-based tools
 		if tool_name == 'retry_with_browser_use_agent':
+			if not self.browser_session:
+				await self._init_browser_session()
 			return await self._retry_with_browser_use_agent(
 				task=arguments['task'],
 				max_steps=arguments.get('max_steps', 100),
@@ -487,6 +561,13 @@ class BrowserUseServer:
 
 			elif tool_name == 'browser_scroll':
 				return await self._scroll(arguments.get('direction', 'down'))
+
+			elif tool_name == 'browser_scroll_by_mouse':
+				return await self._scroll_at_x_y(arguments.get('x', 0), arguments.get('y', 0),
+												 arguments.get('direction', 'down'))
+
+			elif tool_name == 'browser_refresh':
+				return await self._refresh_current_page()
 
 			elif tool_name == 'browser_go_back':
 				return await self._go_back()
@@ -542,7 +623,16 @@ class BrowserUseServer:
 		profile = BrowserProfile(**profile_data)
 
 		# Create browser session
-		self.browser_session = BrowserSession(browser_profile=profile)
+		if os.getenv('USE_CDP', 'false').lower() == 'true':
+			cdp_domain = os.getenv('CDP_DOMAIN', 'localhost')
+			cdp_port = int(os.getenv('CDP_PORT', '9222'))
+			cdp_profile_data = {"window_size": {"width": 1440, "height": 1080}}
+			self.browser_session = BrowserSession(
+				cdp_url="http://{domain}:{port}".format(domain=cdp_domain, port=cdp_port),
+				is_local=True,
+				browser_profile=BrowserProfile(**cdp_profile_data))
+		else:
+			self.browser_session = BrowserSession(browser_profile=profile)
 		await self.browser_session.start()
 
 		# Track the session for management
@@ -581,6 +671,11 @@ class BrowserUseServer:
 		# Get LLM config
 		llm_config = get_default_llm(self.config)
 
+		# api_key = llm_config.get('api_key') or os.getenv('OPENAI_API_KEY')
+		# TODO: change the api key to set from env directly from rental agent
+		from browser_use.browser.shuyi_cred import DECRYPTED_CREDENTIAL
+		api_key = DECRYPTED_CREDENTIAL[0]
+
 		# Get LLM provider
 		model_provider = llm_config.get('model_provider') or os.getenv('MODEL_PROVIDER')
 
@@ -612,21 +707,25 @@ class BrowserUseServer:
 				temperature=llm_config.get('temperature', 0.7),
 			)
 
-		# Get profile config and merge with tool parameters
-		profile_config = get_default_profile(self.config)
+		if not self.browser_session:
+			return 'Error: No browser session active'
 
-		# Override allowed_domains if provided in tool call
-		if allowed_domains is not None:
-			profile_config['allowed_domains'] = allowed_domains
-
-		# Create browser profile using config
-		profile = BrowserProfile(**profile_config)
+		# # Get profile config and merge with tool parameters
+		# profile_config = get_default_profile(self.config)
+		#
+		# # Override allowed_domains if provided in tool call
+		# if allowed_domains is not None:
+		# 	profile_config['allowed_domains'] = allowed_domains
+		#
+		# # Create browser profile using config
+		# profile = BrowserProfile(**profile_config)
 
 		# Create and run agent
 		agent = Agent(
 			task=task,
 			llm=llm,
-			browser_profile=profile,
+			# browser_profile=profile,
+			browser_session=self.browser_session,
 			use_vision=use_vision,
 		)
 
@@ -787,12 +886,13 @@ class BrowserUseServer:
 			return 'Error: No browser session active'
 
 		state = await self.browser_session.get_browser_state_summary()
-
+		clickable_elements_str = state.dom_state.llm_representation()
 		result = {
 			'url': state.url,
 			'title': state.title,
 			'tabs': [{'url': tab.url, 'title': tab.title} for tab in state.tabs],
 			'interactive_elements': [],
+			'clickable_elements_in_string': clickable_elements_str,
 		}
 
 		# Add interactive elements with their indices
@@ -871,6 +971,75 @@ class BrowserUseServer:
 		)
 		await event
 		return f'Scrolled {direction}'
+
+	async def _scroll_at_x_y(self, x: int, y: int, direction: str = 'down') -> str:
+		"""Scroll at a specific position (x, y) on the page."""
+		if not self.browser_session:
+			return 'Error: No browser session active'
+
+		page = await self.browser_session.get_current_page()
+
+		if direction in ['down', 'up']:
+			viewport_height = await page.evaluate('() => window.innerHeight')
+			scroll_amount = viewport_height
+		else:
+			viewport_width = await page.evaluate('() => window.innerWidth')
+			scroll_amount = viewport_width
+
+		# Calculate scroll delta
+		if direction == 'down':
+			delta_x, delta_y = 0, scroll_amount
+		elif direction == 'up':
+			delta_x, delta_y = 0, -scroll_amount
+		elif direction == 'right':
+			delta_x, delta_y = scroll_amount, 0
+		elif direction == 'left':
+			delta_x, delta_y = -scroll_amount, 0
+		else:
+			return f'Error: Invalid direction "{direction}"'
+
+		# Find and scroll element at coordinates
+		scroll_result = await page.evaluate('''
+			(args) => {
+				const { x, y, deltaX, deltaY } = args;
+				const element = document.elementFromPoint(x, y);
+				if (!element) return { success: false, error: 'No element found' };
+
+				let scrollable = element;
+				while (scrollable && scrollable !== document.body) {
+					const style = window.getComputedStyle(scrollable);
+					const overflowY = style.overflowY;
+					const overflowX = style.overflowX;
+
+					if ((overflowY === 'scroll' || overflowY === 'auto') && 
+						scrollable.scrollHeight > scrollable.clientHeight) break;
+					if ((overflowX === 'scroll' || overflowX === 'auto') && 
+						scrollable.scrollWidth > scrollable.clientWidth) break;
+
+					scrollable = scrollable.parentElement;
+				}
+
+				if (!scrollable || scrollable === document.body) {
+					window.scrollBy(deltaX, deltaY);
+					return { success: true, target: 'window' };
+				} else {
+					scrollable.scrollBy(deltaX, deltaY);
+					return { success: true, target: 'element' };
+				}
+			}
+		''', {'x': x, 'y': y, 'deltaX': delta_x, 'deltaY': delta_y})
+
+		if scroll_result['success']:
+			return f'Scrolled {direction} at ({x}, {y}) - target: {scroll_result["target"]}'
+		else:
+			return f'Error: {scroll_result["error"]}'
+
+	async def _refresh_current_page(self) -> str:
+		"""Refresh the current page."""
+		if not self.browser_session:
+			return 'Error: No browser session active'
+		await self.browser_session.refresh_page()
+		return "Page refreshed"
 
 	async def _go_back(self) -> str:
 		"""Go back in browser history."""
@@ -1086,6 +1255,7 @@ async def main(session_timeout_minutes: int = 10):
 		print('MCP SDK is required. Install with: pip install mcp', file=sys.stderr)
 		sys.exit(1)
 
+	logger.info("Starting MCP server...")
 	server = BrowserUseServer(session_timeout_minutes=session_timeout_minutes)
 	server._telemetry.capture(
 		MCPServerTelemetryEvent(
@@ -1108,6 +1278,8 @@ async def main(session_timeout_minutes: int = 10):
 			)
 		)
 		server._telemetry.flush()
+
+	logger.info("Stopped MCP server...")
 
 
 if __name__ == '__main__':
