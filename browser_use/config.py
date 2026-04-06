@@ -242,6 +242,10 @@ class FlatEnvConfig(BaseSettings):
 	# Extension env vars
 	BROWSER_USE_DISABLE_EXTENSIONS: bool | None = Field(default=None)
 
+	# Window size env vars
+	BROWSER_USE_WINDOW_WIDTH: int | None = Field(default=None)
+	BROWSER_USE_WINDOW_HEIGHT: int | None = Field(default=None)
+
 
 class DBStyleEntry(BaseModel):
 	"""Database-style entry with UUID and metadata."""
@@ -501,6 +505,13 @@ class Config:
 		# Extension settings
 		if env_config.BROWSER_USE_DISABLE_EXTENSIONS is not None:
 			config['browser_profile']['enable_default_extensions'] = not env_config.BROWSER_USE_DISABLE_EXTENSIONS
+
+		# Window size settings
+		if env_config.BROWSER_USE_WINDOW_WIDTH is not None or env_config.BROWSER_USE_WINDOW_HEIGHT is not None:
+			config['browser_profile']['window_size'] = {
+				'width': env_config.BROWSER_USE_WINDOW_WIDTH or 1920,
+				'height': env_config.BROWSER_USE_WINDOW_HEIGHT or 1080,
+			}
 
 		return config
 

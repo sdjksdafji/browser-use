@@ -30,6 +30,28 @@ import sys
 os.environ['BROWSER_USE_LOGGING_LEVEL'] = 'critical'
 os.environ['BROWSER_USE_SETUP_LOGGING'] = 'false'
 
+DOM_RETURN_FORMAT = """
+Interactive Elements: All interactive elements will be provided in a tree-style XML format:
+- Format: `[index]<tagname attribute=value />` for interactive elements
+- Text content appears as child nodes on separate lines (not inside tags)
+- Indentation with tabs shows parent/child relationships
+Examples:
+[33]<div />
+	User form
+	[35]<input type=text placeholder=Enter name />
+	*[38]<button aria-label=Submit form />
+		Submit
+[40]<a />
+	About us
+Note that:
+- Only elements with numeric indexes in [] are interactive
+- (stacked) indentation (with \t) is important and means that the element is a (html) child of the element above (with a lower index)
+- Elements tagged with a star `*[` are the new interactive elements that appeared on the website since the last step - if url has not changed. Your previous actions caused that change. Think if you need to interact with them, e.g. after input you might need to select the right option from the list.
+- Pure text elements without [] are not interactive
+- `|SCROLL|` prefix indicates scrollable containers with scroll position info
+- `|SHADOW(open)|` or `|SHADOW(closed)|` prefix indicates shadow DOM elements
+"""
+
 import asyncio
 import json
 import logging
@@ -38,6 +60,7 @@ from pathlib import Path
 from typing import Any
 
 from browser_use.llm import ChatAWSBedrock
+from browser_use.mcp.mcp_helper import compress_png_to_jpg
 
 # Configure logging for MCP mode - redirect to stderr but preserve critical diagnostics
 logging.basicConfig(
@@ -232,13 +255,13 @@ class BrowserUseServer:
 				),
 				types.Tool(
 					name='browser_click',
-					description='Click an element by index or at specific viewport coordinates. Use index for elements from browser_get_state, or coordinate_x/coordinate_y for pixel-precise clicking.',
+					description='Click an element by index or at specific viewport coordinates. Use index for elements from browser_get_state_interactive_only, or coordinate_x/coordinate_y for pixel-precise clicking.',
 					inputSchema={
 						'type': 'object',
 						'properties': {
 							'index': {
 								'type': 'integer',
-								'description': 'The index of the element to click (from browser_get_state). Provide this OR coordinate_x+coordinate_y.',
+								'description': 'The index of the element to click (from browser_get_state_interactive_only). Provide this OR coordinate_x+coordinate_y.',
 							},
 							'coordinate_x': {
 								'type': 'integer',
@@ -264,7 +287,7 @@ class BrowserUseServer:
 						'properties': {
 							'index': {
 								'type': 'integer',
-								'description': 'The index of the input element (from browser_get_state)',
+								'description': 'The index of the input element (from browser_get_state_interactive_only)',
 							},
 							'text': {'type': 'string', 'description': 'The text to type'},
 						},
@@ -272,7 +295,7 @@ class BrowserUseServer:
 					},
 				),
 				types.Tool(
-					name='browser_get_state',
+					name='browser_get_state_interactive_only',
 					description='Get the current state of the page including all interactive elements',
 					inputSchema={
 						'type': 'object',
@@ -286,21 +309,34 @@ class BrowserUseServer:
 					},
 				),
 				types.Tool(
-					name='browser_extract_content',
-					description='Extract structured content from the current page based on a query',
+					name='browser_get_state_all',
+					description='Get the current state of the page including ALL elements (both interactive and non-interactive). '
+								'Each element is marked with is_interactive=true/false to indicate whether it can be interacted with. '
+								'Please use this method as a default way to get the page state, and use browser_get_state_interactive_only for interactive elements only.\n\n'
+					            'The response will contain the page metadata such as URL, title, viewport info, and etc. Then a separator line, followed by the DOM elements. '
+					            'The DOM elements will have the following format: \n' +
+					            DOM_RETURN_FORMAT,
 					inputSchema={
 						'type': 'object',
-						'properties': {
-							'query': {'type': 'string', 'description': 'What information to extract from the page'},
-							'extract_links': {
-								'type': 'boolean',
-								'description': 'Whether to include links in the extraction',
-								'default': False,
-							},
-						},
-						'required': ['query'],
+						'properties': {},
 					},
 				),
+				# types.Tool(
+				# 	name='browser_extract_content',
+				# 	description='Extract structured content from the current page based on a query',
+				# 	inputSchema={
+				# 		'type': 'object',
+				# 		'properties': {
+				# 			'query': {'type': 'string', 'description': 'What information to extract from the page'},
+				# 			'extract_links': {
+				# 				'type': 'boolean',
+				# 				'description': 'Whether to include links in the extraction',
+				# 				'default': False,
+				# 			},
+				# 		},
+				# 		'required': ['query'],
+				# 	},
+				# ),
 				types.Tool(
 					name='browser_get_html',
 					description='Get the raw HTML of the current page or a specific element by CSS selector',
@@ -378,40 +414,40 @@ class BrowserUseServer:
 				# 		"properties": {}
 				# 	}
 				# ),
-				types.Tool(
-					name='retry_with_browser_use_agent',
-					description='Retry a task using the browser-use agent. Only use this as a last resort if you fail to interact with a page multiple times.',
-					inputSchema={
-						'type': 'object',
-						'properties': {
-							'task': {
-								'type': 'string',
-								'description': 'The high-level goal and detailed step-by-step description of the task the AI browser agent needs to attempt, along with any relevant data needed to complete the task and info about previous attempts.',
-							},
-							'max_steps': {
-								'type': 'integer',
-								'description': 'Maximum number of steps an agent can take.',
-								'default': 100,
-							},
-							'model': {
-								'type': 'string',
-								'description': 'LLM model to use (e.g., gpt-4o, claude-3-opus-20240229). Defaults to the configured model.',
-							},
-							'allowed_domains': {
-								'type': 'array',
-								'items': {'type': 'string'},
-								'description': 'List of domains the agent is allowed to visit (security feature)',
-								'default': [],
-							},
-							'use_vision': {
-								'type': 'boolean',
-								'description': 'Whether to use vision capabilities (screenshots) for the agent',
-								'default': True,
-							},
-						},
-						'required': ['task'],
-					},
-				),
+				# types.Tool(
+				# 	name='retry_with_browser_use_agent',
+				# 	description='Retry a task using the browser-use agent. Only use this as a last resort if you fail to interact with a page multiple times.',
+				# 	inputSchema={
+				# 		'type': 'object',
+				# 		'properties': {
+				# 			'task': {
+				# 				'type': 'string',
+				# 				'description': 'The high-level goal and detailed step-by-step description of the task the AI browser agent needs to attempt, along with any relevant data needed to complete the task and info about previous attempts.',
+				# 			},
+				# 			'max_steps': {
+				# 				'type': 'integer',
+				# 				'description': 'Maximum number of steps an agent can take.',
+				# 				'default': 100,
+				# 			},
+				# 			'model': {
+				# 				'type': 'string',
+				# 				'description': 'LLM model to use (e.g., gpt-4o, claude-3-opus-20240229). Defaults to the configured model.',
+				# 			},
+				# 			'allowed_domains': {
+				# 				'type': 'array',
+				# 				'items': {'type': 'string'},
+				# 				'description': 'List of domains the agent is allowed to visit (security feature)',
+				# 				'default': [],
+				# 			},
+				# 			'use_vision': {
+				# 				'type': 'boolean',
+				# 				'description': 'Whether to use vision capabilities (screenshots) for the agent',
+				# 				'default': True,
+				# 			},
+				# 		},
+				# 		'required': ['task'],
+				# 	},
+				# ),
 				# Browser session management tools
 				types.Tool(
 					name='browser_list_sessions',
@@ -481,15 +517,15 @@ class BrowserUseServer:
 	) -> str | list[types.TextContent | types.ImageContent]:
 		"""Execute a browser-use tool. Returns str for most tools, or a content list for tools with image output."""
 
-		# Agent-based tools
-		if tool_name == 'retry_with_browser_use_agent':
-			return await self._retry_with_browser_use_agent(
-				task=arguments['task'],
-				max_steps=arguments.get('max_steps', 100),
-				model=arguments.get('model'),
-				allowed_domains=arguments.get('allowed_domains', []),
-				use_vision=arguments.get('use_vision', True),
-			)
+		# # Agent-based tools
+		# if tool_name == 'retry_with_browser_use_agent':
+		# 	return await self._retry_with_browser_use_agent(
+		# 		task=arguments['task'],
+		# 		max_steps=arguments.get('max_steps', 100),
+		# 		model=arguments.get('model'),
+		# 		allowed_domains=arguments.get('allowed_domains', []),
+		# 		use_vision=arguments.get('use_vision', True),
+		# 	)
 
 		# Browser session management tools (don't require active session)
 		if tool_name == 'browser_list_sessions':
@@ -521,12 +557,16 @@ class BrowserUseServer:
 			elif tool_name == 'browser_type':
 				return await self._type_text(arguments['index'], arguments['text'])
 
-			elif tool_name == 'browser_get_state':
+			elif tool_name == 'browser_get_state_interactive_only':
 				state_json, screenshot_b64 = await self._get_browser_state(arguments.get('include_screenshot', False))
 				content: list[types.TextContent | types.ImageContent] = [types.TextContent(type='text', text=state_json)]
 				if screenshot_b64:
-					content.append(types.ImageContent(type='image', data=screenshot_b64, mimeType='image/png'))
+					jpg_b64, mime_type = compress_png_to_jpg(screenshot_b64)
+					content.append(types.ImageContent(type='image', data=jpg_b64, mimeType=mime_type))
 				return content
+
+			elif tool_name == 'browser_get_state_all':
+				return await self._get_browser_state_all()
 
 			elif tool_name == 'browser_get_html':
 				return await self._get_html(arguments.get('selector'))
@@ -535,7 +575,8 @@ class BrowserUseServer:
 				meta_json, screenshot_b64 = await self._screenshot(arguments.get('full_page', False))
 				content: list[types.TextContent | types.ImageContent] = [types.TextContent(type='text', text=meta_json)]
 				if screenshot_b64:
-					content.append(types.ImageContent(type='image', data=screenshot_b64, mimeType='image/png'))
+					jpg_b64, mime_type = compress_png_to_jpg(screenshot_b64, max_size_mb=0.98)
+					content.append(types.ImageContent(type='image', data=jpg_b64, mimeType=mime_type))
 				return content
 
 			elif tool_name == 'browser_extract_content':
@@ -918,6 +959,42 @@ class BrowserUseServer:
 				}
 
 		return json.dumps(result, indent=2), screenshot_b64
+
+	async def _get_browser_state_all(self) -> str:
+		"""Get current browser state using browser-use's compact LLM representation."""
+		if not self.browser_session:
+			return 'Error: No browser session active'
+
+		state = await self.browser_session.get_browser_state_summary()
+
+		# Build metadata header
+		lines = [
+			f'URL: {state.url}',
+			f'Title: {state.title}',
+		]
+
+		# Add viewport/scroll info
+		if state.page_info:
+			pi = state.page_info
+			lines.append(f'Viewport: {pi.viewport_width}x{pi.viewport_height}')
+			lines.append(f'Page: {pi.page_width}x{pi.page_height}')
+			lines.append(f'Scroll: ({pi.scroll_x}, {pi.scroll_y})')
+
+		# Add tabs
+		if state.tabs:
+			tabs_str = ', '.join(f'"{t.title}"' for t in state.tabs[:5])
+			if len(state.tabs) > 5:
+				tabs_str += f' (+{len(state.tabs) - 5} more)'
+			lines.append(f'Tabs: {tabs_str}')
+
+		lines.append('')
+		lines.append('--- DOM Elements ---')
+
+		# Use browser-use's existing compact LLM representation
+		dom_representation = state.dom_state.llm_representation()
+		lines.append(dom_representation)
+
+		return '\n'.join(lines)
 
 	async def _get_html(self, selector: str | None = None) -> str:
 		"""Get raw HTML of the page or a specific element."""

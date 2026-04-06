@@ -895,7 +895,7 @@ class DefaultActionWatchdog(BaseWatchdog):
 			# Perform the click using CDP (element is not occluded)
 			try:
 				self.logger.debug(f'👆 Dragging mouse over element before clicking x: {center_x}px y: {center_y}px ...')
-				# Move mouse to element
+				# Move mouse to element (hover for 0.5s to allow shadow DOM elements to process hover state)
 				await cdp_session.cdp_client.send.Input.dispatchMouseEvent(
 					params={
 						'type': 'mouseMoved',
@@ -904,7 +904,7 @@ class DefaultActionWatchdog(BaseWatchdog):
 					},
 					session_id=session_id,
 				)
-				await asyncio.sleep(0.05)
+				await asyncio.sleep(0.5)
 
 				# Mouse down
 				self.logger.debug(f'👆🏾 Clicking x: {center_x}px y: {center_y}px ...')
@@ -1071,7 +1071,7 @@ class DefaultActionWatchdog(BaseWatchdog):
 
 			self.logger.debug(f'👆 Moving mouse to ({coordinate_x}, {coordinate_y})...')
 
-			# Move mouse to coordinates
+			# Move mouse to coordinates (hover for 0.5s to allow shadow DOM elements to process hover state)
 			await cdp_session.cdp_client.send.Input.dispatchMouseEvent(
 				params={
 					'type': 'mouseMoved',
@@ -1080,7 +1080,7 @@ class DefaultActionWatchdog(BaseWatchdog):
 				},
 				session_id=session_id,
 			)
-			await asyncio.sleep(0.05)
+			await asyncio.sleep(0.5)
 
 			# Mouse down
 			self.logger.debug(f'👆🏾 Clicking at ({coordinate_x}, {coordinate_y})...')
