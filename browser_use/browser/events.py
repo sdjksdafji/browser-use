@@ -140,6 +140,7 @@ class ClickCoordinateEvent(BaseEvent[dict]):
 	coordinate_y: int
 	button: Literal['left', 'right', 'middle'] = 'left'
 	force: bool = False  # If True, skip safety checks (file input, print, select)
+	shadow_dom_fallback: bool = False  # If True, detect shadow DOM at coordinates and use JS .click() on the inner element instead of CDP mouse events
 
 	event_timeout: float | None = Field(default_factory=lambda: _get_timeout('TIMEOUT_ClickCoordinateEvent', 15.0))  # seconds
 

@@ -276,6 +276,11 @@ class BrowserUseServer:
 								'description': 'Whether to open any resulting navigation in a new tab',
 								'default': False,
 							},
+							'shadow_dom_fallback': {
+								'type': 'boolean',
+								'description': 'If true and using coordinate clicking, detect shadow DOM at coordinates and use JS .click() on the inner element instead of CDP mouse events. Use this when normal coordinate clicks fail on shadow DOM elements.',
+								'default': False,
+							},
 						},
 					},
 				),
@@ -552,6 +557,7 @@ class BrowserUseServer:
 					coordinate_x=arguments.get('coordinate_x'),
 					coordinate_y=arguments.get('coordinate_y'),
 					new_tab=arguments.get('new_tab', False),
+					shadow_dom_fallback=arguments.get('shadow_dom_fallback', False),
 				)
 
 			elif tool_name == 'browser_type':
@@ -794,6 +800,7 @@ class BrowserUseServer:
 		coordinate_x: int | None = None,
 		coordinate_y: int | None = None,
 		new_tab: bool = False,
+		shadow_dom_fallback: bool = False,
 	) -> str:
 		"""Click an element by index or at viewport coordinates."""
 		if not self.browser_session:
@@ -807,7 +814,7 @@ class BrowserUseServer:
 			from browser_use.browser.events import ClickCoordinateEvent
 
 			event = self.browser_session.event_bus.dispatch(
-				ClickCoordinateEvent(coordinate_x=coordinate_x, coordinate_y=coordinate_y)
+				ClickCoordinateEvent(coordinate_x=coordinate_x, coordinate_y=coordinate_y, shadow_dom_fallback=shadow_dom_fallback)
 			)
 			await event
 			return f'Clicked at coordinates ({coordinate_x}, {coordinate_y})'

@@ -399,7 +399,7 @@ class DefaultActionWatchdog(BaseWatchdog):
 			if event.force:
 				self.logger.debug(f'Force clicking at coordinates ({event.coordinate_x}, {event.coordinate_y})')
 				return await self._execute_click_with_download_detection(
-					self._click_on_coordinate(event.coordinate_x, event.coordinate_y, force=True)
+					self._click_on_coordinate(event.coordinate_x, event.coordinate_y, force=True, shadow_dom_fallback=event.shadow_dom_fallback)
 				)
 
 			# Get element at coordinates for safety checks
@@ -410,7 +410,7 @@ class DefaultActionWatchdog(BaseWatchdog):
 					f'No element found at coordinates ({event.coordinate_x}, {event.coordinate_y}), proceeding with click anyway'
 				)
 				return await self._execute_click_with_download_detection(
-					self._click_on_coordinate(event.coordinate_x, event.coordinate_y, force=False)
+					self._click_on_coordinate(event.coordinate_x, event.coordinate_y, force=False, shadow_dom_fallback=event.shadow_dom_fallback)
 				)
 
 			# Safety check: file input
@@ -442,7 +442,7 @@ class DefaultActionWatchdog(BaseWatchdog):
 
 			# All safety checks passed, click at coordinates (with download detection)
 			return await self._execute_click_with_download_detection(
-				self._click_on_coordinate(event.coordinate_x, event.coordinate_y, force=False)
+				self._click_on_coordinate(event.coordinate_x, event.coordinate_y, force=False, shadow_dom_fallback=event.shadow_dom_fallback)
 			)
 
 		except Exception:
@@ -1052,7 +1052,7 @@ class DefaultActionWatchdog(BaseWatchdog):
 				long_term_memory=error_detail,
 			)
 
-	async def _click_on_coordinate(self, coordinate_x: int, coordinate_y: int, force: bool = False) -> dict | None:
+	async def _click_on_coordinate(self, coordinate_x: int, coordinate_y: int, force: bool = False, shadow_dom_fallback: bool = False) -> dict | None:
 		"""
 		Click directly at coordinates using CDP Input.dispatchMouseEvent.
 
@@ -1060,6 +1060,7 @@ class DefaultActionWatchdog(BaseWatchdog):
 			coordinate_x: X coordinate in viewport
 			coordinate_y: Y coordinate in viewport
 			force: If True, skip all safety checks (used when force=True in event)
+			shadow_dom_fallback: If True, detect shadow DOM at coordinates after hover and use JS .click() on the inner element instead of CDP mouse events
 
 		Returns:
 			Dict with click coordinates or None
@@ -1081,6 +1082,13 @@ class DefaultActionWatchdog(BaseWatchdog):
 				session_id=session_id,
 			)
 			await asyncio.sleep(0.5)
+
+			# If shadow_dom_fallback is enabled, try to detect and click shadow DOM inner element
+			if shadow_dom_fallback:
+				shadow_result = await self._try_shadow_dom_click(coordinate_x, coordinate_y, cdp_session, session_id)
+				if shadow_result is not None:
+					return shadow_result
+				self.logger.debug('No shadow DOM detected, proceeding with normal coordinate click')
 
 			# Mouse down
 			self.logger.debug(f'👆🏾 Clicking at ({coordinate_x}, {coordinate_y})...')
@@ -1131,6 +1139,71 @@ class DefaultActionWatchdog(BaseWatchdog):
 				message=f'Failed to click at coordinates: {e}',
 				long_term_memory=f'Failed to click at coordinates ({coordinate_x}, {coordinate_y}). The coordinates may be outside viewport or the page may have changed.',
 			)
+
+	async def _try_shadow_dom_click(self, x: int, y: int, cdp_session, session_id: str) -> dict | None:
+		"""
+		Detect shadow DOM at coordinates and click the deepest inner element via JS .click().
+
+		Uses document.elementFromPoint + recursive shadowRoot.elementFromPoint to pierce
+		through open shadow roots and find the actual target element. If found, calls
+		.click() on it (which produces a trusted event in Chromium).
+
+		Args:
+			x: X coordinate in viewport
+			y: Y coordinate in viewport
+			cdp_session: Active CDP session
+			session_id: CDP session ID
+
+		Returns:
+			Dict with click metadata if shadow DOM was detected and clicked, None otherwise.
+			Returning None signals the caller to proceed with normal coordinate click.
+		"""
+		try:
+			result = await cdp_session.cdp_client.send.Runtime.evaluate(
+				params={
+					'expression': (
+						'(function(x, y) {'
+						'  var el = document.elementFromPoint(x, y);'
+						'  if (!el) return { hasShadow: false };'
+						'  var current = el;'
+						'  var depth = 0;'
+						'  while (current.shadowRoot) {'
+						'    var inner = current.shadowRoot.elementFromPoint(x, y);'
+						'    if (!inner || inner === current) break;'
+						'    current = inner;'
+						'    depth++;'
+						'  }'
+						'  if (depth > 0) {'
+						'    current.click();'
+						'    return { hasShadow: true, depth: depth, tagName: current.tagName, clicked: true };'
+						'  }'
+						'  return { hasShadow: false };'
+						f'}})({x}, {y})'
+					),
+					'returnByValue': True,
+					'awaitPromise': False,
+				},
+				session_id=session_id,
+			)
+
+			value = result.get('result', {}).get('value', {})
+			if value and value.get('hasShadow') and value.get('clicked'):
+				self.logger.info(
+					f'🔮 Shadow DOM detected (depth={value.get("depth")}), '
+					f'clicked inner <{value.get("tagName")}> via JS at ({x}, {y})'
+				)
+				return {
+					'click_x': x,
+					'click_y': y,
+					'method': 'shadow_dom_js_click',
+					'shadow_depth': value.get('depth'),
+					'inner_tag': value.get('tagName'),
+				}
+
+			return None
+		except Exception as e:
+			self.logger.debug(f'Shadow DOM detection/click failed at ({x}, {y}): {e}')
+			return None
 
 	async def _type_to_page(self, text: str):
 		"""
