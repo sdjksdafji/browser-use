@@ -621,17 +621,27 @@ class BrowserUseServer:
 		# Get profile config
 		profile_config = get_default_profile(self.config)
 
+		# Check for CDP_URL environment variable to connect to an existing browser
+		cdp_url = os.environ.get('CDP_URL')
+
 		# Merge profile config with defaults and overrides
 		profile_data = {
 			'downloads_path': str(Path.home() / 'Downloads' / 'browser-use-mcp'),
 			'wait_between_actions': 0.5,
 			'keep_alive': True,
-			'user_data_dir': '~/.config/browseruse/profiles/default',
 			'device_scale_factor': 1.0,
 			'disable_security': False,
 			'headless': False,
 			**profile_config,  # Config values override defaults
 		}
+
+		if cdp_url:
+			# Connect to existing browser via CDP URL instead of launching a subprocess
+			profile_data['cdp_url'] = cdp_url
+			logger.debug(f'Using CDP_URL environment variable to connect to existing browser: {cdp_url}')
+		else:
+			# Only set user_data_dir when launching a local browser subprocess
+			profile_data.setdefault('user_data_dir', '~/.config/browseruse/profiles/default')
 
 		# Tool parameter overrides (highest priority)
 		if allowed_domains is not None:
