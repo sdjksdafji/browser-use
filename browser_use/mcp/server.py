@@ -517,6 +517,32 @@ class BrowserUseServer:
 					)
 				)
 
+	async def _ensure_cdp_connected(self, timeout: float = 300.0) -> None:
+		"""Wait for the CDP connection to be alive, polling until timeout.
+
+		If the WebSocket dropped and auto-reconnect is in progress, this will
+		wait for it to finish. Raises RuntimeError if still not connected after timeout.
+		"""
+		if self.browser_session and self.browser_session.is_cdp_connected:
+			return
+
+		if not self.browser_session:
+			return  # Will be initialized by the caller
+
+		logger.warning('CDP connection is not alive, waiting for reconnection...')
+		poll_interval = 0.5
+		elapsed = 0.0
+		while elapsed < timeout:
+			await asyncio.sleep(poll_interval)
+			elapsed += poll_interval
+			if self.browser_session.is_cdp_connected:
+				logger.info(f'CDP connection restored after {elapsed:.1f}s')
+				return
+
+		raise RuntimeError(
+			'Cannot connect to root CDP server. You need to close the session and restart!'
+		)
+
 	async def _execute_tool(
 		self, tool_name: str, arguments: dict[str, Any]
 	) -> str | list[types.TextContent | types.ImageContent]:
@@ -547,6 +573,9 @@ class BrowserUseServer:
 			# Ensure browser session exists
 			if not self.browser_session:
 				await self._init_browser_session()
+
+			# Wait for CDP connection to be alive (handles WS drops / auto-reconnect)
+			await self._ensure_cdp_connected()
 
 			if tool_name == 'browser_navigate':
 				return await self._navigate(arguments['url'], arguments.get('new_tab', False))
