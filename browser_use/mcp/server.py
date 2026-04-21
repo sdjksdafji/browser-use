@@ -1378,6 +1378,15 @@ async def main(session_timeout_minutes: int = 10):
 	try:
 		await server.run()
 	finally:
+		# Kill locally-launched Chrome processes (skip externally-connected CDP sessions)
+		try:
+			for session_data in server.active_sessions.values():
+				session = session_data['session']
+				if session.is_local:
+					await session.kill()
+		except Exception as e:
+			logger.error(f'Error cleaning up local browser sessions on shutdown: {e}')
+
 		duration = time.time() - server._start_time
 		server._telemetry.capture(
 			MCPServerTelemetryEvent(
