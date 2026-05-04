@@ -115,7 +115,7 @@ logging.disable(logging.CRITICAL)
 # Import browser_use modules
 from browser_use import ActionModel, Agent
 from browser_use.browser import BrowserProfile, BrowserSession
-from browser_use.config import get_default_llm, get_default_profile, load_browser_use_config
+from browser_use.config import CONFIG, get_default_llm, get_default_profile, load_browser_use_config
 from browser_use.filesystem.file_system import FileSystem
 from browser_use.llm.openai.chat import ChatOpenAI
 from browser_use.tools.service import Tools
@@ -654,8 +654,12 @@ class BrowserUseServer:
 		cdp_url = os.environ.get('CDP_URL')
 
 		# Merge profile config with defaults and overrides
+		# Per-instance paths are derived from CONFIG so that BROWSER_USE_CONFIG_DIR
+		# actually isolates parallel MCP servers (otherwise two MCP processes share
+		# Chrome profile / downloads / FileSystem dirs and the second Chrome hangs
+		# on SingletonLock).
 		profile_data = {
-			'downloads_path': str(Path.home() / 'Downloads' / 'browser-use-mcp'),
+			'downloads_path': str(CONFIG.BROWSER_USE_CONFIG_DIR / 'downloads'),
 			'wait_between_actions': 0.5,
 			'keep_alive': True,
 			'device_scale_factor': 1.0,
@@ -670,7 +674,7 @@ class BrowserUseServer:
 			logger.debug(f'Using CDP_URL environment variable to connect to existing browser: {cdp_url}')
 		else:
 			# Only set user_data_dir when launching a local browser subprocess
-			profile_data.setdefault('user_data_dir', '~/.config/browseruse/profiles/default')
+			profile_data.setdefault('user_data_dir', str(CONFIG.BROWSER_USE_DEFAULT_USER_DATA_DIR))
 
 		# Tool parameter overrides (highest priority)
 		if allowed_domains is not None:
@@ -708,7 +712,8 @@ class BrowserUseServer:
 			)
 
 		# Initialize FileSystem for extraction actions
-		file_system_path = profile_config.get('file_system_path', '~/.browser-use-mcp')
+		# Default under CONFIG.BROWSER_USE_CONFIG_DIR so parallel MCP servers don't share workspace.
+		file_system_path = profile_config.get('file_system_path', str(CONFIG.BROWSER_USE_CONFIG_DIR / 'mcp_fs'))
 		self.file_system = FileSystem(base_dir=Path(file_system_path).expanduser())
 
 		logger.debug('Browser session initialized')
